@@ -8,6 +8,23 @@
     <div v-if="loading" class="loading">{{ t('common.loading') }}</div>
     <div v-else-if="error" class="error">{{ error }}</div>
     <div v-else>
+      <div v-if="restockOrders.length > 0" class="card restock-section">
+        <div class="card-header">
+          <h3 class="card-title">Submitted Restock Orders ({{ restockOrders.length }})</h3>
+        </div>
+        <div class="restock-list">
+          <div v-for="order in restockOrders" :key="order.id" class="restock-row">
+            <span class="restock-order-number">{{ order.order_number }}</span>
+            <span class="restock-meta">{{ order.items.length }} items</span>
+            <span class="restock-meta">${{ order.total_cost.toLocaleString() }}</span>
+            <span class="restock-meta">Submitted {{ formatDate(order.created_date) }}</span>
+            <span class="restock-meta">Delivery {{ formatDate(order.estimated_delivery) }}</span>
+            <span class="restock-meta">{{ order.lead_time_days }}-day lead time</span>
+            <span class="badge restock">RESTOCK</span>
+          </div>
+        </div>
+      </div>
+
       <div class="stats-grid">
         <div class="stat-card success">
           <div class="stat-label">{{ t('status.delivered') }}</div>
@@ -95,6 +112,7 @@ export default {
     const loading = ref(true)
     const error = ref(null)
     const orders = ref([])
+    const restockOrders = ref([])
 
     // Use shared filters
     const {
@@ -153,13 +171,25 @@ export default {
       })
     }
 
-    onMounted(loadOrders)
+    const loadRestockOrders = async () => {
+      try {
+        restockOrders.value = await api.getRestockOrders()
+      } catch (err) {
+        console.error('Failed to load restock orders:', err)
+      }
+    }
+
+    onMounted(() => {
+      loadOrders()
+      loadRestockOrders()
+    })
 
     return {
       t,
       loading,
       error,
       orders,
+      restockOrders,
       getOrdersByStatus,
       getOrderStatusClass,
       formatDate,
@@ -275,5 +305,48 @@ export default {
 .item-meta {
   font-size: 0.813rem;
   color: #64748b;
+}
+
+/* Restock Orders Section */
+.restock-section {
+  border-left: 3px solid #3b82f6;
+  background: #fafcff;
+}
+
+.restock-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.restock-row {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 0.75rem 1rem;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  flex-wrap: wrap;
+}
+
+.restock-order-number {
+  font-weight: 700;
+  color: #2563eb;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.875rem;
+  min-width: 140px;
+}
+
+.restock-meta {
+  font-size: 0.813rem;
+  color: #475569;
+}
+
+.badge.restock {
+  background: #eff6ff;
+  color: #3b82f6;
+  border: 1px solid #bfdbfe;
+  margin-left: auto;
 }
 </style>

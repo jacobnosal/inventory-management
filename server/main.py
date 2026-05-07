@@ -2,9 +2,35 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 from pydantic import BaseModel
+from datetime import datetime, timedelta
 from mock_data import inventory_items, orders, demand_forecasts, backlog_items, spending_summary, monthly_spending, category_spending, recent_transactions, purchase_orders
 
 app = FastAPI(title="Factory Inventory Management System")
+
+FORECAST_METADATA = {
+    "WDG-001": {"category": "Actuators",     "unit_cost": 45.00},
+    "BRG-102": {"category": "Actuators",     "unit_cost": 32.50},
+    "GSK-203": {"category": "Actuators",     "unit_cost": 8.75},
+    "MTR-304": {"category": "Actuators",     "unit_cost": 285.00},
+    "FLT-405": {"category": "Actuators",     "unit_cost": 12.99},
+    "VLV-506": {"category": "Actuators",     "unit_cost": 67.50},
+    "PSU-501": {"category": "Power Supplies","unit_cost": 89.99},
+    "SNR-420": {"category": "Sensors",       "unit_cost": 24.99},
+    "CTL-330": {"category": "Controllers",   "unit_cost": 156.00},
+}
+
+LEAD_TIME_DAYS = {
+    "Circuit Boards": 14,
+    "Sensors":        10,
+    "Actuators":      12,
+    "Controllers":    16,
+    "Power Supplies": 11,
+}
+
+TREND_PRIORITY = {"increasing": 0, "stable": 1, "decreasing": 2}
+
+restock_orders: list = []
+restock_order_counter = 1
 
 # Quarter mapping for date filtering
 QUARTER_MAP = {
@@ -119,6 +145,42 @@ class CreatePurchaseOrderRequest(BaseModel):
     unit_cost: float
     expected_delivery_date: str
     notes: Optional[str] = None
+
+class RestockOrderItem(BaseModel):
+    item_sku: str
+    item_name: str
+    category: str
+    quantity: int
+    unit_cost: float
+    total_cost: float
+    lead_time_days: int
+
+class RestockOrder(BaseModel):
+    id: str
+    order_number: str
+    items: List[RestockOrderItem]
+    total_cost: float
+    status: str
+    created_date: str
+    estimated_delivery: str
+    lead_time_days: int
+
+class CreateRestockOrderRequest(BaseModel):
+    items: List[dict]
+    budget: float
+
+class RestockRecommendation(BaseModel):
+    id: str
+    item_sku: str
+    item_name: str
+    category: str
+    current_demand: int
+    forecasted_demand: int
+    trend: str
+    restock_quantity: int
+    unit_cost: float
+    estimated_cost: float
+    lead_time_days: int
 
 # API endpoints
 @app.get("/")
@@ -303,6 +365,74 @@ def get_monthly_trends():
     result = list(months.values())
     result.sort(key=lambda x: x['month'])
     return result
+
+@app.get("/api/restock/recommendations", response_model=List[RestockRecommendation])
+def get_restock_recommendations():
+    result = []
+    for forecast in demand_forecasts:
+        sku = forecast["item_sku"]
+        meta = FORECAST_METADATA.get(sku, {"category": "Actuators", "unit_cost": 50.00})
+        category = meta["category"]
+        unit_cost = meta["unit_cost"]
+        restock_qty = forecast["forecasted_demand"]
+        result.append({
+            "id": forecast["id"],
+            "item_sku": sku,
+            "item_name": forecast["item_name"],
+            "category": category,
+            "current_demand": forecast["current_demand"],
+            "forecasted_demand": forecast["forecasted_demand"],
+            "trend": forecast["trend"],
+            "restock_quantity": restock_qty,
+            "unit_cost": unit_cost,
+            "estimated_cost": round(restock_qty * unit_cost, 2),
+            "lead_time_days": LEAD_TIME_DAYS.get(category, 14),
+        })
+    result.sort(key=lambda x: TREND_PRIORITY.get(x["trend"], 1))
+    return result
+
+@app.get("/api/restock-orders", response_model=List[RestockOrder])
+def get_restock_orders():
+    return restock_orders
+
+@app.post("/api/restock-orders", response_model=RestockOrder)
+def create_restock_order(request: CreateRestockOrderRequest):
+    global restock_order_counter
+    now = datetime.now()
+    items = []
+    max_lead_time = 0
+    total_cost = 0.0
+    for item in request.items:
+        category = item.get("category", "Actuators")
+        lead_time = LEAD_TIME_DAYS.get(category, 14)
+        max_lead_time = max(max_lead_time, lead_time)
+        qty = item.get("quantity", 0)
+        unit_cost = item.get("unit_cost", 0.0)
+        item_total = round(qty * unit_cost, 2)
+        total_cost += item_total
+        items.append({
+            "item_sku": item.get("item_sku", ""),
+            "item_name": item.get("item_name", ""),
+            "category": category,
+            "quantity": qty,
+            "unit_cost": unit_cost,
+            "total_cost": item_total,
+            "lead_time_days": lead_time,
+        })
+    estimated_delivery = (now + timedelta(days=max_lead_time)).strftime("%Y-%m-%dT%H:%M:%S")
+    order = {
+        "id": str(restock_order_counter),
+        "order_number": f"RST-{now.year}-{restock_order_counter:04d}",
+        "items": items,
+        "total_cost": round(total_cost, 2),
+        "status": "Submitted",
+        "created_date": now.strftime("%Y-%m-%dT%H:%M:%S"),
+        "estimated_delivery": estimated_delivery,
+        "lead_time_days": max_lead_time,
+    }
+    restock_orders.append(order)
+    restock_order_counter += 1
+    return order
 
 if __name__ == "__main__":
     import uvicorn
